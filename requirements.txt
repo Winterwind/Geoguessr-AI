@@ -1,0 +1,12 @@
+# python=3.11
+
+numpy==1.26.4
+transformers==4.49
+torch
+Pillow
+clip
+pysankey
+matplotlib
+pandas
+seaborn
+datasets
