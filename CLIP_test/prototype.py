@@ -189,7 +189,7 @@ train_accuracies = []
 val_accuracies = []
 test_accuracies = []
 
-num_epochs = 10
+num_epochs = 15
 for epoch in range(num_epochs):
     model.train()
     total_train_loss = 0
