@@ -3,7 +3,6 @@ import torch, os
 import torch.nn as nn
 import numpy as np
 import matplotlib.pyplot as plt
-from torch.amp import autocast, GradScaler
 from transformers import CLIPProcessor, CLIPModel
 from torch.utils.data import Dataset, DataLoader
 from torchvision.transforms import ToPILImage
@@ -104,6 +103,7 @@ processor = CLIPProcessor.from_pretrained("geolocal/StreetCLIP")
 # Initialize GradScaler for mixed precision training (only for CUDA)
 use_amp = torch.cuda.is_available()
 if use_amp:
+    from torch.amp import autocast, GradScaler
     scaler = GradScaler('cuda')
     print("Using mixed precision training (AMP)")
 else:
