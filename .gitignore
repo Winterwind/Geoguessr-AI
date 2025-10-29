@@ -211,3 +211,5 @@ __marimo__/
 *checkpoints/
 *test_predictions/
 .DS_Store
+output/checkpoints/
+output/test_predictions/
