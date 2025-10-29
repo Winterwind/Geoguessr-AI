@@ -31,7 +31,7 @@ class GeoGuessrDataset(Dataset):
         return len(self.dataset)
     
     def __getitem__(self, idx):
-        sample = self.dataset[idx]  # Now this returns a dict!
+        sample = self.dataset[idx]  # This returns a dict
         
         image = sample['image']
         lat = float(sample['latitude'])
@@ -162,26 +162,12 @@ def haversine_distance(pred, target, reduction=None):
 def haversine_loss(pred, target):
     return haversine_distance(pred, target, reduction='mean')
 
-# Training loop example
+# Training loop
 optimizer = torch.optim.Adam(model.regressor.parameters(), lr=1e-4)
 
 os.makedirs('output/checkpoints', exist_ok=True)
 print(f'Training data has {len(train_loader)} batches, testing data has {len(test_loader)} batches, and validation data has {len(val_loader)} batches')
 
-# def train_step(images, true_coords):
-#     inputs = processor(images=images, return_tensors="pt", padding=True)
-#     pixel_values = inputs['pixel_values'].to(my_device)
-    
-#     predicted_coords = model(pixel_values)
-#     loss = haversine_loss(predicted_coords, true_coords)
-    
-#     optimizer.zero_grad()
-#     loss.backward()
-#     optimizer.step()
-    
-#     return loss.item()
-
-# Storage for plotting
 train_losses = []
 val_losses = []
 test_losses = []
@@ -266,7 +252,7 @@ for epoch in range(num_epochs):
         torch.save(checkpoint, best_checkpoint_path)
         print(f"Saved best model: {best_checkpoint_path} (Val Loss: {avg_val_loss:.2f} km)")
 
-# test phase
+# Test phase
 os.makedirs('output/test_predictions', exist_ok=True)
 
 test_loss = 0
@@ -334,7 +320,7 @@ with torch.no_grad():
                 ax.imshow(pil_image)
                 ax.axis('off')
                 
-                # Create title with all information
+                # Create title
                 title = f"Test Image {image_counter + 1}\n"
                 title += f"Predicted: ({pred_lat:.4f}°, {pred_lon:.4f}°)\n"
                 title += f"True: ({true_lat:.4f}°, {true_lon:.4f}°)\n"
