@@ -1,0 +1,96 @@
+(ggenv) [Arians-MacBook-Air:~/LocalRepos/SharedRepos/Geoguessr-AI] ariandjahed% py CLIP_test/prototype.py
+Using 500 training images, 100 testing images, and 50 images
+use mps
+Training data has 10 batches, testing data has 2 batches, and validation data has 1 batches
+Epoch 0, Batch 0, Loss: 7543.11 km
+Epoch 0, Batch 5, Loss: 6827.99 km
+Epoch 0 Average Loss: 7121.12 km
+Saved checkpoint: output/checkpoints/checkpoint_epoch_00.pt
+Saved best model: output/checkpoints/best_model.pt (Val Loss: 635.57 km)
+Epoch 1, Batch 0, Loss: 6312.58 km
+Epoch 1, Batch 5, Loss: 6194.81 km
+Epoch 1 Average Loss: 5394.87 km
+Saved checkpoint: output/checkpoints/checkpoint_epoch_01.pt
+Saved best model: output/checkpoints/best_model.pt (Val Loss: 531.33 km)
+Epoch 2, Batch 0, Loss: 4883.60 km
+Epoch 2, Batch 5, Loss: 3857.25 km
+Epoch 2 Average Loss: 4905.95 km
+Saved checkpoint: output/checkpoints/checkpoint_epoch_02.pt
+Saved best model: output/checkpoints/best_model.pt (Val Loss: 526.12 km)
+Epoch 3, Batch 0, Loss: 5260.84 km
+Epoch 3, Batch 5, Loss: 3809.32 km
+Epoch 3 Average Loss: 4613.49 km
+Saved checkpoint: output/checkpoints/checkpoint_epoch_03.pt
+Saved best model: output/checkpoints/best_model.pt (Val Loss: 490.13 km)
+Epoch 4, Batch 0, Loss: 4579.10 km
+Epoch 4, Batch 5, Loss: 3791.30 km
+Epoch 4 Average Loss: 4375.96 km
+Saved checkpoint: output/checkpoints/checkpoint_epoch_04.pt
+Saved best model: output/checkpoints/best_model.pt (Val Loss: 470.65 km)
+Epoch 5, Batch 0, Loss: 5169.03 km
+Epoch 5, Batch 5, Loss: 3304.28 km
+Epoch 5 Average Loss: 4050.13 km
+Saved checkpoint: output/checkpoints/checkpoint_epoch_05.pt
+Saved best model: output/checkpoints/best_model.pt (Val Loss: 422.37 km)
+Epoch 6, Batch 0, Loss: 4006.53 km
+Epoch 6, Batch 5, Loss: 4617.20 km
+Epoch 6 Average Loss: 3735.28 km
+Saved checkpoint: output/checkpoints/checkpoint_epoch_06.pt
+Saved best model: output/checkpoints/best_model.pt (Val Loss: 392.23 km)
+Epoch 7, Batch 0, Loss: 3536.49 km
+Epoch 7, Batch 5, Loss: 3726.55 km
+Epoch 7 Average Loss: 3362.70 km
+Saved checkpoint: output/checkpoints/checkpoint_epoch_07.pt
+Saved best model: output/checkpoints/best_model.pt (Val Loss: 370.39 km)
+Epoch 8, Batch 0, Loss: 3429.91 km
+Epoch 8, Batch 5, Loss: 3154.68 km
+Epoch 8 Average Loss: 3073.65 km
+Saved checkpoint: output/checkpoints/checkpoint_epoch_08.pt
+Saved best model: output/checkpoints/best_model.pt (Val Loss: 350.85 km)
+Epoch 9, Batch 0, Loss: 3569.31 km
+Epoch 9, Batch 5, Loss: 2967.19 km
+Epoch 9 Average Loss: 2939.84 km
+Saved checkpoint: output/checkpoints/checkpoint_epoch_09.pt
+Saved best model: output/checkpoints/best_model.pt (Val Loss: 317.54 km)
+Saved output/test_predictions/test_img_000.png - Distance: 3138.47 km
+Saved output/test_predictions/test_img_001.png - Distance: 738.75 km
+Saved output/test_predictions/test_img_002.png - Distance: 411.82 km
+Saved output/test_predictions/test_img_003.png - Distance: 6174.03 km
+Saved output/test_predictions/test_img_004.png - Distance: 1723.99 km
+Saved output/test_predictions/test_img_005.png - Distance: 7969.94 km
+Saved output/test_predictions/test_img_006.png - Distance: 5098.58 km
+Saved output/test_predictions/test_img_007.png - Distance: 1019.20 km
+Saved output/test_predictions/test_img_008.png - Distance: 847.27 km
+Saved output/test_predictions/test_img_009.png - Distance: 746.34 km
+Saved output/test_predictions/test_img_010.png - Distance: 528.01 km
+Saved output/test_predictions/test_img_011.png - Distance: 1073.67 km
+Saved output/test_predictions/test_img_012.png - Distance: 1037.83 km
+Saved output/test_predictions/test_img_013.png - Distance: 1092.68 km
+Saved output/test_predictions/test_img_014.png - Distance: 9583.14 km
+Saved output/test_predictions/test_img_015.png - Distance: 1136.71 km
+Saved output/test_predictions/test_img_016.png - Distance: 1130.79 km
+Saved output/test_predictions/test_img_017.png - Distance: 2104.63 km
+Saved output/test_predictions/test_img_018.png - Distance: 596.65 km
+Saved output/test_predictions/test_img_019.png - Distance: 296.55 km
+
+Test Phase Complete. Average test loss: 2575.63 km
+Saved 20 test prediction visualizations to output/test_predictions/
+Traceback (most recent call last):
+  File "/Users/ariandjahed/LocalRepos/SharedRepos/Geoguessr-AI/CLIP_test/prototype.py", line 333, in <module>
+    plt.plot(epochs, test_losses * num_epochs, 'r-', label='test')
+  File "/Users/ariandjahed/anaconda3/envs/ggenv/lib/python3.11/site-packages/matplotlib/pyplot.py", line 3838, in plot
+    return gca().plot(
+           ^^^^^^^^^^^
+  File "/Users/ariandjahed/anaconda3/envs/ggenv/lib/python3.11/site-packages/matplotlib/axes/_axes.py", line 1777, in plot
+    lines = [*self._get_lines(self, *args, data=data, **kwargs)]
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/ariandjahed/anaconda3/envs/ggenv/lib/python3.11/site-packages/matplotlib/axes/_base.py", line 297, in __call__
+    yield from self._plot_args(
+               ^^^^^^^^^^^^^^^^
+  File "/Users/ariandjahed/anaconda3/envs/ggenv/lib/python3.11/site-packages/matplotlib/axes/_base.py", line 494, in _plot_args
+    raise ValueError(f"x and y must have same first dimension, but "
+ValueError: x and y must have same first dimension, but have shapes (10,) and (100,)
+(ggenv) [Arians-MacBook-Air:~/LocalRepos/SharedRepos/Geoguessr-AI] ariandjahed% py CLIP_test/test.py 
+(ggenv) [Arians-MacBook-Air:~/LocalRepos/SharedRepos/Geoguessr-AI] ariandjahed% py CLIP_test/test.py
+(ggenv) [Arians-MacBook-Air:~/LocalRepos/SharedRepos/Geoguessr-AI] ariandjahed% py CLIP_test/test.py
+(ggenv) [Arians-MacBook-Air:~/LocalRepos/SharedRepos/Geoguessr-AI] ariandjahed% 

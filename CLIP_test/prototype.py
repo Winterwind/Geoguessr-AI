@@ -1,11 +1,49 @@
 from PIL import Image
-import torch, clip
+import torch, clip, tqdm, os
 import torch.nn as nn
+import numpy as np
+import matplotlib.pyplot as plt
 from transformers import CLIPProcessor, CLIPModel
+from torch.utils.data import Dataset, DataLoader
+from torchvision.transforms import ToPILImage
 from datasets import load_dataset
 from pprint import pp
 
-ds = load_dataset("stochastic/random_streetview_images_pano_v0.0.2")
+ds = load_dataset("stochastic/random_streetview_images_pano_v0.0.2").shuffle(seed=67)
+# sample_train = torch.Tensor(ds['train'])[:1000]
+sample_train = ds['train'].select(range(500))
+sample_test = ds['train'].select(range(500, 600))
+sample_val = ds['train'].select(range(600, 650))
+# each sample in the split above is a dictionary of lists of format
+# {'image': [list of images], 'country_iso_alpha2': [respective list of countries (in abbreviated form)], 'latitude': [respective list of latitudes], 'longitude': [respective list of longitudes], 'address': [respective list of addresses]}
+
+print(f"Using {len(sample_train)} training images, {len(sample_test)} testing images, and {len(sample_val)} images")
+# pp(sample_val[0])
+
+class GeoGuessrDataset(Dataset):
+    def __init__(self, hf_dataset, processor):
+        self.dataset = hf_dataset
+        self.processor = processor
+        
+    def __len__(self):
+        return len(self.dataset)
+    
+    def __getitem__(self, idx):
+        sample = self.dataset[idx]  # Now this returns a dict!
+        
+        image = sample['image']
+        lat = float(sample['latitude'])
+        lon = float(sample['longitude'])
+        # print(f'{image}\n{lat}\n{lon}')
+        
+        # Process image
+        inputs = self.processor(images=image, return_tensors="pt")
+        pixel_values = inputs['pixel_values'].squeeze(0)  # Remove batch dim
+        
+        # Create coordinate tensor
+        coords = torch.tensor([lat, lon], dtype=torch.float32)
+        
+        return pixel_values, coords
 
 if torch.backends.mps.is_available():
     print('use mps')
@@ -58,14 +96,34 @@ class GeoGuessr(nn.Module):
         return torch.stack([lat, lon], dim=1)
 
 # Training setup
-model = GeoGuessr()
+model = GeoGuessr().to(my_device)
 processor = CLIPProcessor.from_pretrained("geolocal/StreetCLIP")
 
+train_data = GeoGuessrDataset(sample_train, processor)
+test_data = GeoGuessrDataset(sample_test, processor)
+val_data = GeoGuessrDataset(sample_val, processor)
+
+train_loader = DataLoader(train_data, batch_size=50, shuffle=True)
+test_loader = DataLoader(test_data, batch_size=50, shuffle=False)
+val_loader = DataLoader(val_data, batch_size=50, shuffle=False)
+
+# # test
+# pixel_values, coords = train_data[0]
+# print(f"Pixel values shape: {pixel_values.shape}")  # Should be [3, 224, 224]
+# print(f"Coordinates: {coords}")  # Should be [lat, lon]
+
 # Custom loss that accounts for Earth's spherical geometry
-def haversine_loss(pred, target):
+def haversine_distance(pred, target, reduction=None):
     """
     Calculate great circle distance between predicted and actual coordinates
-    More accurate than euclidean distance for lat/lon
+    
+    Args:
+        pred: predicted coordinates [batch_size, 2]
+        target: true coordinates [batch_size, 2]
+        reduction: 'mean' for average, 'none' for individual distances
+    
+    Returns:
+        distance in km (scalar if reduction='mean', tensor if reduction='none')
     """
     lat1, lon1 = pred[:, 0], pred[:, 1]
     lat2, lon2 = target[:, 0], target[:, 1]
@@ -81,21 +139,202 @@ def haversine_loss(pred, target):
     
     # Earth radius in km
     r = 6371
+    distances = c * r
     
-    return (c * r).mean()
+    if reduction == 'mean':
+        return distances.mean()
+    elif reduction is None:
+        return distances
+    else:
+        raise ValueError(f"Unknown reduction: {reduction}")
+
+def haversine_loss(pred, target):
+    return haversine_distance(pred, target, reduction='mean')
 
 # Training loop example
 optimizer = torch.optim.Adam(model.regressor.parameters(), lr=1e-4)
 
-def train_step(images, true_coords):
-    inputs = processor(images=images, return_tensors="pt", padding=True)
-    pixel_values = inputs['pixel_values'].to(my_device)
+os.makedirs('output/checkpoints', exist_ok=True)
+print(f'Training data has {len(train_loader)} batches, testing data has {len(test_loader)} batches, and validation data has {len(val_loader)} batches')
+
+# def train_step(images, true_coords):
+#     inputs = processor(images=images, return_tensors="pt", padding=True)
+#     pixel_values = inputs['pixel_values'].to(my_device)
     
-    predicted_coords = model(pixel_values)
-    loss = haversine_loss(predicted_coords, true_coords)
+#     predicted_coords = model(pixel_values)
+#     loss = haversine_loss(predicted_coords, true_coords)
     
-    optimizer.zero_grad()
-    loss.backward()
-    optimizer.step()
+#     optimizer.zero_grad()
+#     loss.backward()
+#     optimizer.step()
     
-    return loss.item()
+#     return loss.item()
+
+# Storage for plotting
+train_losses = []
+val_losses = []
+test_losses = []
+train_accuracies = []
+val_accuracies = []
+test_accuracies = []
+
+num_epochs = 10
+for epoch in range(num_epochs):
+    model.train()
+    total_train_loss = 0
+    
+    for batch_idx, (pixel_values, true_coords) in enumerate(train_loader):
+        pixel_values = torch.FloatTensor(pixel_values).to(my_device)
+        true_coords = true_coords.to(my_device)
+        
+        # print(type(pixel_values))
+        predicted_coords = model(pixel_values)
+        loss = haversine_loss(predicted_coords, true_coords)
+        
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        
+        total_train_loss += loss.item()
+        
+        if batch_idx % 5 == 0:
+            print(f"Epoch {epoch}, Batch {batch_idx}, Loss: {loss.item():.2f} km")
+    avg_train_loss = total_train_loss / len(train_loader)
+    train_losses.append(avg_train_loss)
+    print(f"Epoch {epoch} Average Loss: {avg_train_loss:.2f} km")
+
+    total_val_loss = 0
+    model.eval()
+    with torch.no_grad():
+        for batch_idx, (pixel_values, true_coords) in enumerate(val_loader):
+            pixel_values = pixel_values.to(my_device)
+            true_coords = true_coords.to(my_device)
+
+            predicted_coords = model(pixel_values)
+            loss = haversine_loss(predicted_coords, true_coords)
+            total_val_loss += loss.item()
+
+    
+    avg_val_loss = total_val_loss / len(val_loader)
+    val_losses.append(avg_val_loss)
+
+    checkpoint = {
+        'epoch': epoch,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'train_loss': avg_train_loss,
+        'val_loss': avg_val_loss,
+        'train_losses': train_losses,
+        'val_losses': val_losses,
+    }
+    
+    checkpoint_path = f'output/checkpoints/checkpoint_epoch_{epoch:02d}.pt'
+    torch.save(checkpoint, checkpoint_path)
+    print(f"Saved checkpoint: {checkpoint_path}")
+    
+    # Also save the best model (lowest validation loss)
+    if epoch == 0 or avg_val_loss < min(val_losses[:-1], default=float('inf')):
+        best_checkpoint_path = 'output/checkpoints/best_model.pt'
+        torch.save(checkpoint, best_checkpoint_path)
+        print(f"Saved best model: {best_checkpoint_path} (Val Loss: {avg_val_loss:.2f} km)")
+
+# test phase
+os.makedirs('output/test_predictions', exist_ok=True)
+
+test_loss = 0
+image_counter = 0
+max_images_to_save = 20  # Limit number of saved images
+model.eval
+with torch.no_grad():
+    for batch_idx, (pixel_values, true_coords) in enumerate(test_loader):
+        pixel_values = pixel_values.to(my_device)
+        true_coords = true_coords.to(my_device)
+
+        predicted_coords = model(pixel_values)
+        
+        # Calculate loss for the batch (mean)
+        loss = haversine_loss(predicted_coords, true_coords)
+        test_loss += loss.detach().cpu().numpy()
+        
+        # Calculate individual distances for visualization
+        individual_distances = haversine_distance(predicted_coords, true_coords)
+
+        # Save visualizations for first few batches
+        if image_counter < max_images_to_save:
+            # Move data to CPU for processing
+            pred_cpu = predicted_coords.cpu()
+            true_cpu = true_coords.cpu()
+            images_cpu = pixel_values.cpu()
+            distances_cpu = individual_distances.cpu()
+            
+            # Process each image in the batch
+            for i in range(len(pixel_values)):
+                if image_counter >= max_images_to_save:
+                    break
+                
+                # Get individual predictions and ground truth
+                pred_lat, pred_lon = pred_cpu[i][0].item(), pred_cpu[i][1].item()
+                true_lat, true_lon = true_cpu[i][0].item(), true_cpu[i][1].item()
+                
+                # Get the pre-calculated distance for this image
+                distance_km = distances_cpu[i].item()
+                
+                # Calculate percent error (relative to Earth's half-circumference ~20,000 km)
+                max_distance = 20000  # km
+                percent_error = (distance_km / max_distance) * 100
+                
+                # Convert tensor image to displayable format
+                # Denormalize the image (CLIP uses mean=[0.48145466, 0.4578275, 0.40821073], std=[0.26862954, 0.26130258, 0.27577711])
+                image = images_cpu[i]
+                mean = torch.tensor([0.48145466, 0.4578275, 0.40821073]).view(3, 1, 1)
+                std = torch.tensor([0.26862954, 0.26130258, 0.27577711]).view(3, 1, 1)
+                image = image * std + mean
+                image = torch.clamp(image, 0, 1)
+                
+                # Convert to PIL Image
+                to_pil = ToPILImage()
+                pil_image = to_pil(image)
+                
+                # Create figure with image and information
+                fig, ax = plt.subplots(figsize=(10, 8))
+                ax.imshow(pil_image)
+                ax.axis('off')
+                
+                # Create title with all information
+                title = f"Test Image {image_counter + 1}\n"
+                title += f"Predicted: ({pred_lat:.4f}°, {pred_lon:.4f}°)\n"
+                title += f"True: ({true_lat:.4f}°, {true_lon:.4f}°)\n"
+                title += f"Distance Error: {distance_km:.2f} km\n"
+                title += f"Percent Error: {percent_error:.2f}%"
+                
+                plt.title(title, fontsize=12, pad=20)
+                plt.tight_layout()
+                
+                # Save the figure
+                save_path = f'output/test_predictions/test_img_{image_counter:03d}.png'
+                plt.savefig(save_path, dpi=150, bbox_inches='tight')
+                plt.close()
+                
+                print(f"Saved {save_path} - Distance: {distance_km:.2f} km")
+                
+                image_counter += 1
+
+avg_test_loss = test_loss / len(test_loader)
+test_losses = [avg_test_loss] * num_epochs
+
+print(f"\nTest Phase Complete. Average test loss: {avg_test_loss:.2f} km")
+print(f"Saved {image_counter} test prediction visualizations to output/test_predictions/")
+
+# Plot loss
+plt.figure(figsize=(10, 6))
+epochs = range(1, num_epochs + 1)
+plt.plot(epochs, train_losses, 'b-', label='train')
+plt.plot(epochs, val_losses, 'orange', label='valid')
+plt.plot(epochs, test_losses, 'r-', label='test')
+plt.title('ResNet-3 Loss')
+plt.xlabel('epoch')
+plt.ylabel('loss')
+plt.legend()
+plt.grid(True)
+plt.savefig('output/loss.png')
+plt.close()
