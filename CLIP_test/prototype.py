@@ -1,15 +1,17 @@
 from PIL import Image
-import torch, clip, tqdm, os
+import torch, os
 import torch.nn as nn
 import numpy as np
 import matplotlib.pyplot as plt
+from torch.amp import autocast, GradScaler
 from transformers import CLIPProcessor, CLIPModel
 from torch.utils.data import Dataset, DataLoader
 from torchvision.transforms import ToPILImage
 from datasets import load_dataset
-from pprint import pp
+from tqdm import tqdm
+import random
 
-ds = load_dataset("stochastic/random_streetview_images_pano_v0.0.2").shuffle(seed=67)
+ds = load_dataset("stochastic/random_streetview_images_pano_v0.0.2").shuffle(seed=random.randint(0, 10000))
 # sample_train = torch.Tensor(ds['train'])[:1000]
 sample_train = ds['train'].select(range(500))
 sample_test = ds['train'].select(range(500, 600))
@@ -17,7 +19,7 @@ sample_val = ds['train'].select(range(600, 650))
 # each sample in the split above is a dictionary of lists of format
 # {'image': [list of images], 'country_iso_alpha2': [respective list of countries (in abbreviated form)], 'latitude': [respective list of latitudes], 'longitude': [respective list of longitudes], 'address': [respective list of addresses]}
 
-print(f"Using {len(sample_train)} training images, {len(sample_test)} testing images, and {len(sample_val)} images")
+print(f"Using {len(sample_train)} training images, {len(sample_test)} testing images, and {len(sample_val)} validation images")
 # pp(sample_val[0])
 
 class GeoGuessrDataset(Dataset):
@@ -98,6 +100,15 @@ class GeoGuessr(nn.Module):
 # Training setup
 model = GeoGuessr().to(my_device)
 processor = CLIPProcessor.from_pretrained("geolocal/StreetCLIP")
+
+# Initialize GradScaler for mixed precision training (only for CUDA)
+use_amp = torch.cuda.is_available()
+if use_amp:
+    scaler = GradScaler('cuda')
+    print("Using mixed precision training (AMP)")
+else:
+    scaler = None
+    print("Using standard precision training")
 
 train_data = GeoGuessrDataset(sample_train, processor)
 test_data = GeoGuessrDataset(sample_test, processor)
@@ -183,40 +194,55 @@ for epoch in range(num_epochs):
     model.train()
     total_train_loss = 0
     
-    for batch_idx, (pixel_values, true_coords) in enumerate(train_loader):
+    train_pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs} [Train]", leave=True)
+    for batch_idx, (pixel_values, true_coords) in enumerate(train_pbar):
         pixel_values = torch.FloatTensor(pixel_values).to(my_device)
         true_coords = true_coords.to(my_device)
         
-        # print(type(pixel_values))
-        predicted_coords = model(pixel_values)
-        loss = haversine_loss(predicted_coords, true_coords)
-        
         optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        
+        # Use autocast only if AMP is enabled (CUDA only)
+        if use_amp:
+            with autocast(device_type='cuda'):
+                predicted_coords = model(pixel_values)
+                loss = haversine_loss(predicted_coords, true_coords)
+            
+            # Scale loss and do backward pass
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            # Standard training for MPS or CPU
+            predicted_coords = model(pixel_values)
+            loss = haversine_loss(predicted_coords, true_coords)
+            
+            loss.backward()
+            optimizer.step()
         
         total_train_loss += loss.item()
-        
-        if batch_idx % 5 == 0:
-            print(f"Epoch {epoch}, Batch {batch_idx}, Loss: {loss.item():.2f} km")
+        train_pbar.set_postfix({'loss': f'{loss.item():.2f} km', 'avg_loss': f'{total_train_loss/(batch_idx+1):.2f} km'})
+    
     avg_train_loss = total_train_loss / len(train_loader)
     train_losses.append(avg_train_loss)
-    print(f"Epoch {epoch} Average Loss: {avg_train_loss:.2f} km")
+    print(f"Epoch {epoch+1}/{num_epochs} - Training Loss: {avg_train_loss:.2f} km")
 
     total_val_loss = 0
     model.eval()
     with torch.no_grad():
-        for batch_idx, (pixel_values, true_coords) in enumerate(val_loader):
+        val_pbar = tqdm(val_loader, desc=f"Epoch {epoch+1}/{num_epochs} [Valid]", leave=True)
+        for batch_idx, (pixel_values, true_coords) in enumerate(val_pbar):
             pixel_values = pixel_values.to(my_device)
             true_coords = true_coords.to(my_device)
 
             predicted_coords = model(pixel_values)
             loss = haversine_loss(predicted_coords, true_coords)
             total_val_loss += loss.item()
-
+            
+            val_pbar.set_postfix({'loss': f'{loss.item():.2f} km', 'avg_loss': f'{total_val_loss/(batch_idx+1):.2f} km'})
     
     avg_val_loss = total_val_loss / len(val_loader)
     val_losses.append(avg_val_loss)
+    print(f"Epoch {epoch+1}/{num_epochs} - Validation Loss: {avg_val_loss:.2f} km\n")
 
     checkpoint = {
         'epoch': epoch,
@@ -227,10 +253,12 @@ for epoch in range(num_epochs):
         'train_losses': train_losses,
         'val_losses': val_losses,
     }
-    
+
+    '''
     checkpoint_path = f'output/checkpoints/checkpoint_epoch_{epoch:02d}.pt'
     torch.save(checkpoint, checkpoint_path)
     print(f"Saved checkpoint: {checkpoint_path}")
+    '''
     
     # Also save the best model (lowest validation loss)
     if epoch == 0 or avg_val_loss < min(val_losses[:-1], default=float('inf')):
@@ -244,9 +272,12 @@ os.makedirs('output/test_predictions', exist_ok=True)
 test_loss = 0
 image_counter = 0
 max_images_to_save = 20  # Limit number of saved images
-model.eval
+model.eval()
+
+print("\nStarting test phase...")
 with torch.no_grad():
-    for batch_idx, (pixel_values, true_coords) in enumerate(test_loader):
+    test_pbar = tqdm(test_loader, desc="Testing", leave=True)
+    for batch_idx, (pixel_values, true_coords) in enumerate(test_pbar):
         pixel_values = pixel_values.to(my_device)
         true_coords = true_coords.to(my_device)
 
@@ -255,6 +286,9 @@ with torch.no_grad():
         # Calculate loss for the batch (mean)
         loss = haversine_loss(predicted_coords, true_coords)
         test_loss += loss.detach().cpu().numpy()
+        
+        avg_test_loss = test_loss / (batch_idx + 1)
+        test_pbar.set_postfix({'loss': f'{loss.item():.2f} km', 'avg_loss': f'{avg_test_loss:.2f} km'})
         
         # Calculate individual distances for visualization
         individual_distances = haversine_distance(predicted_coords, true_coords)
@@ -331,7 +365,7 @@ epochs = range(1, num_epochs + 1)
 plt.plot(epochs, train_losses, 'b-', label='train')
 plt.plot(epochs, val_losses, 'orange', label='valid')
 plt.plot(epochs, test_losses, 'r-', label='test')
-plt.title('ResNet-3 Loss')
+plt.title('Model Loss')
 plt.xlabel('epoch')
 plt.ylabel('loss')
 plt.legend()
