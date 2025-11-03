@@ -143,9 +143,9 @@ else:
     print("Using standard precision training")
 
 # Training loop
-sample_train = ds['train'].select(range(4000))
-sample_test = ds['train'].select(range(4000, 4400))
-sample_val = ds['train'].select(range(4400, 4800))
+sample_train = ds['train'].select(range(9000))
+sample_val = ds['train'].select(range(9000, 10000))
+sample_test = ds['train'].select(range(10000, len(ds['train'])))
 
 train_data = GeoGuessrDataset(sample_train, processor)
 test_data = GeoGuessrDataset(sample_test, processor)
@@ -158,7 +158,7 @@ val_loader = DataLoader(val_data, batch_size=64, shuffle=False)
 optimizer = torch.optim.Adam(model.regressor.parameters(), lr=1e-4)
 
 os.makedirs('output/checkpoints', exist_ok=True)
-print(f"Using {len(sample_train)} training images, {len(sample_test)} testing images, and {len(sample_val)} validation images")
+print(f"Using {len(sample_train)} training images, {len(sample_val)} validation images, and {len(sample_test)} testing images")
 
 train_losses = []
 val_losses = []
