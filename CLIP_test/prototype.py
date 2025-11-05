@@ -10,7 +10,8 @@ from datasets import load_dataset
 from tqdm import tqdm
 import random
 
-seed = random.randint(0, 10000)
+# seed = random.randint(0, 10000)
+seed = 5519
 ds = load_dataset("stochastic/random_streetview_images_pano_v0.0.2").shuffle(seed=seed)
 print(f"Using seed: {seed}")
 
@@ -50,14 +51,31 @@ class GeoGuessrDataset(Dataset):
         return pixel_values, coords
 
 class GeoGuessr(nn.Module):
-    def __init__(self, clip_model_name="geolocal/StreetCLIP"):
+    def __init__(self, clip_model_name="geolocal/StreetCLIP", unfreeze_layers=2):
         super().__init__()
         # Load pre-trained CLIP as feature extractor
         self.clip = CLIPModel.from_pretrained(clip_model_name)
         
-        # Freeze CLIP weights (optional - can fine-tune later)
+        # Freeze CLIP weights 
         for param in self.clip.parameters():
             param.requires_grad = False
+
+        # Unfreeze last N layers of CLIP
+        if unfreeze_layers > 0:
+            total_layers = len(self.clip.vision_model.encoder.layers)
+            print(f"Total CLIP vision encoder layers: {total_layers}")
+            print(f"Unfreezing last {unfreeze_layers} layers")
+        
+        for i in range(total_layers - unfreeze_layers, total_layers):
+            for param in self.clip.vision_model.encoder.layers[i].parameters():
+                param.requires_grad = True
+        
+        # Unfreeze the final layer norm and projection
+        for param in self.clip.vision_model.post_layernorm.parameters():
+            param.requires_grad = True
+        if hasattr(self.clip.vision_model, 'visual_projection'):
+            for param in self.clip.vision_model.visual_projection.parameters():
+                param.requires_grad = True
         
         # Get the embedding dimension from CLIP
         embed_dim = self.clip.config.projection_dim  # Usually 512
@@ -76,9 +94,7 @@ class GeoGuessr(nn.Module):
         )
         
     def forward(self, pixel_values):
-        # Get image embeddings from CLIP
-        with torch.no_grad():  # Remove if fine-tuning CLIP
-            image_embeds = self.clip.get_image_features(pixel_values=pixel_values)
+        image_embeds = self.clip.get_image_features(pixel_values=pixel_values)
         
         # Predict coordinates
         coords = self.regressor(image_embeds)
@@ -112,6 +128,7 @@ def haversine_distance(pred, target, reduction=None):
     dlon = lon2 - lon1
     
     a = torch.sin(dlat/2)**2 + torch.cos(lat1) * torch.cos(lat2) * torch.sin(dlon/2)**2
+    a = torch.clamp(a, 0.0, 1.0)
     c = 2 * torch.asin(torch.sqrt(a))
     
     # Earth radius in km
@@ -129,7 +146,7 @@ def haversine_loss(pred, target):
     return haversine_distance(pred, target, reduction='mean')
 
 # Training setup
-model = GeoGuessr().to(my_device)
+model = GeoGuessr(unfreeze_layers=2).to(my_device)
 processor = CLIPProcessor.from_pretrained("geolocal/StreetCLIP")
 
 # Initialize GradScaler for mixed precision training (only for CUDA)
@@ -156,25 +173,80 @@ test_loader = DataLoader(test_data, batch_size=64, shuffle=False)
 val_loader = DataLoader(val_data, batch_size=64, shuffle=False)
 
 if __name__ == '__main__':
-    optimizer = torch.optim.Adam(model.regressor.parameters(), lr=1e-4)
+    # Verify what's trainable
+    print("\nTrainable parameters:")
+    total_params = 0
+    trainable_params = 0
+    for name, param in model.named_parameters():
+        total_params += param.numel()
+        if param.requires_grad:
+            trainable_params += param.numel()
+            print(f"  {name}: {param.numel():,} params")
+
+    print(f"\nTotal parameters: {total_params:,}")
+    print(f"Trainable parameters: {trainable_params:,}")
+    print(f"Percentage trainable: {100*trainable_params/total_params:.2f}%\n")
+
+    clip_params = []
+    for name, param in model.clip.named_parameters():
+        if param.requires_grad:
+            clip_params.append(param)
+
+    optimizer = torch.optim.Adam([
+        {'params': model.regressor.parameters(), 'lr': 1e-4},  # Higher LR for regressor
+        {'params': clip_params, 'lr': 1e-5}  # Lower LR for CLIP (10x smaller)
+    ])
+
+    # Learning rate scheduler
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, 
+        mode='min',           # minimize validation loss
+        factor=0.5,           # reduce LR by half
+        patience=2,           # wait 2 epochs before reducing
+        min_lr=1e-7           # don't go below this
+    )
 
     os.makedirs('output/checkpoints', exist_ok=True)
     print(f"Using {len(sample_train)} training images, {len(sample_val)} validation images, and {len(sample_test)} testing images")
 
+    # RESUME TRAINING
+    resume_from_checkpoint = False # Set to True to resume
+    checkpoint_path = 'output/checkpoints/best_model.pt'
+
     train_losses = []
     val_losses = []
-    test_losses = []
     train_accuracies = []
     val_accuracies = []
     test_accuracies = []
 
-    # Early stopping parameters
-    patience = 2
-    best_val_loss = float('inf')
+    start_epoch = 0
+    num_epochs = 50
+    patience = 4
     epochs_no_improve = 0
+    best_val_loss = float('inf')
 
-    num_epochs = 30
-    for epoch in range(num_epochs):
+    if resume_from_checkpoint and os.path.exists(checkpoint_path):
+        print(f"Resuming from checkpoint: {checkpoint_path}")
+        
+        checkpoint = torch.load(checkpoint_path, map_location=my_device)
+        
+        # Load model and optimizer states
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        
+        # Load training history
+        start_epoch = checkpoint['epoch'] + 1  # Start from next epoch
+        train_losses = checkpoint.get('train_losses', [])
+        val_losses = checkpoint.get('val_losses', [])
+        best_val_loss = checkpoint.get('val_loss', float('inf'))
+        
+        print(f"Resumed from epoch {checkpoint['epoch'] + 1}")
+        print(f"Previous best val loss: {best_val_loss:.2f} km")
+        print(f"Training history loaded: {len(train_losses)} epochs")
+        print(f"Starting from epoch: {start_epoch + 1}\n")
+
+    for epoch in range(start_epoch, num_epochs):
         model.train()
         total_train_loss = 0
         
@@ -193,6 +265,11 @@ if __name__ == '__main__':
                 
                 # Scale loss and do backward pass
                 scaler.scale(loss).backward()
+
+                # Clip gradients to prevent explosion
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
                 scaler.step(optimizer)
                 scaler.update()
             else:
@@ -201,6 +278,8 @@ if __name__ == '__main__':
                 loss = haversine_loss(predicted_coords, true_coords)
                 
                 loss.backward()
+
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
             
             total_train_loss += loss.item()
@@ -233,10 +312,14 @@ if __name__ == '__main__':
         val_losses.append(avg_val_loss)
         print(f"Epoch {epoch+1}/{num_epochs} - Validation Loss: {avg_val_loss:.2f} km\n")
 
+        # Step the scheduler based on validation loss
+        scheduler.step(avg_val_loss)
+
         checkpoint = {
             'epoch': epoch,
             'model_state_dict': model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
+            'scheduler_state_dict': scheduler.state_dict(),
             'train_loss': avg_train_loss,
             'val_loss': avg_val_loss,
             'train_losses': train_losses,
@@ -355,21 +438,21 @@ if __name__ == '__main__':
                     
                     image_counter += 1
 
-    avg_test_loss = test_loss / len(test_loader)
+        avg_test_loss = test_loss / len(test_loader)
 
-    print(f"\nTest Phase Complete. Average test loss: {avg_test_loss:.2f} km")
-    print(f"Saved {image_counter} test prediction visualizations to output/test_predictions/")
+        print(f"\nTest Phase Complete. Average test loss: {avg_test_loss:.2f} km")
+        print(f"Saved {image_counter} test prediction visualizations to output/test_predictions/")
 
-    # Plot loss
-    plt.figure(figsize=(10, 6))
-    epochs = range(1, len(train_losses) + 1)
-    plt.plot(epochs, train_losses, 'b-', label='train')
-    plt.plot(epochs, val_losses, 'orange', label='valid')
-    plt.axhline(y=avg_test_loss, color='r', linestyle='-', label='test')
-    plt.title('Model Loss')
-    plt.xlabel('epoch')
-    plt.ylabel('loss (km)')
-    plt.legend()
-    plt.grid(True)
-    plt.savefig('output/loss.png')
-    plt.close()
+        # Plot loss
+        plt.figure(figsize=(10, 6))
+        epochs = range(1, len(train_losses) + 1)
+        plt.plot(epochs, train_losses, 'b-', label='train')
+        plt.plot(epochs, val_losses, 'orange', label='valid')
+        plt.axhline(y=avg_test_loss, color='r', linestyle='-', label='test')
+        plt.title('Model Loss')
+        plt.xlabel('epoch')
+        plt.ylabel('loss (km)')
+        plt.legend()
+        plt.grid(True)
+        plt.savefig('output/loss.png')
+        plt.close()

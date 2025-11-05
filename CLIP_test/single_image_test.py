@@ -1,15 +1,8 @@
 from PIL import Image
-import torch, clip, os, base64, folium, prototype
-import torch.nn as nn
-import numpy as np
+import torch, folium, prototype
 import matplotlib.pyplot as plt
-from transformers import CLIPProcessor, CLIPModel
-from torch.utils.data import Dataset, DataLoader
+from transformers import CLIPProcessor
 from torchvision.transforms import ToPILImage
-from io import BytesIO
-from tqdm import tqdm
-from datasets import load_dataset
-from pprint import pp
 
 if __name__ == '__main__':
     use_amp = False
@@ -35,7 +28,7 @@ if __name__ == '__main__':
     dataset = prototype.ds
     model = prototype.GeoGuessr().to(my_device)
     processor = CLIPProcessor.from_pretrained("geolocal/StreetCLIP")
-    checkpoint = torch.load('output/checkpoints/best_model.pt', map_location=my_device)
+    checkpoint = torch.load('output_best/checkpoints/best_model.pt', map_location=my_device)
 
     print(f"Loaded best model from epoch {checkpoint['epoch']+1} with validation loss: {checkpoint['val_loss']:.2f} km")
 
