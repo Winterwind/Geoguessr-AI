@@ -10,3 +10,4 @@ matplotlib
 pandas
 seaborn
 datasets
+folium
