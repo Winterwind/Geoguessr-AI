@@ -3,6 +3,7 @@ import torch, folium, prototype
 import matplotlib.pyplot as plt
 from transformers import CLIPProcessor
 from torchvision.transforms import ToPILImage
+import os
 
 if __name__ == '__main__':
     use_amp = False
@@ -26,9 +27,9 @@ if __name__ == '__main__':
         print("Using standard precision training")
 
     dataset = prototype.ds
-    model = prototype.GeoGuessr().to(my_device)
+    model = prototype.GeoGuessr(unfreeze_layers=2).to(my_device)
     processor = CLIPProcessor.from_pretrained("geolocal/StreetCLIP")
-    checkpoint = torch.load('output_best/checkpoints/best_model.pt', map_location=my_device)
+    checkpoint = torch.load('output_best_FT/checkpoints/best_model.pt', map_location=my_device)
 
     print(f"Loaded best model from epoch {checkpoint['epoch']+1} with validation loss: {checkpoint['val_loss']:.2f} km")
 
@@ -36,8 +37,9 @@ if __name__ == '__main__':
     # image = sample['image']
     # print(type(image))
 
-    image_path = "CLIP_test/turkey.jpg"
+    image_path = "single_test.png"
     img = Image.open(image_path)
+    # img = img.resize((3030, 561))
     inputs = processor(images=img, return_tensors="pt")
     pixel_values = inputs['pixel_values'].to(my_device)
 
@@ -79,10 +81,12 @@ if __name__ == '__main__':
     ).add_to(m)
                     
     # Adjust zoom to show both points
-    m.fit_bounds([[pred_lat, pred_lon]])
+    # m.fit_bounds([[pred_lat, pred_lon]])
+
+    os.makedirs('single_guess', exist_ok=True)
                     
     # Save map as HTML
-    map_path = f'output/test_predictions/test_map_turkey.html'
+    map_path = f'single_guess/single_guess.html'
     m.save(map_path)
                     
     # ========== CREATE FIGURE WITH IMAGE ==========
@@ -91,14 +95,14 @@ if __name__ == '__main__':
     ax.axis('off')
                     
     # Create title
-    title = f"Test Image with sample Turkey image\n"
+    title = f"Single Guess\n"
     title += f"Predicted: ({pred_lat:.4f}°, {pred_lon:.4f}°)\n"
                     
     plt.title(title, fontsize=12, pad=20)
     plt.tight_layout()
                     
     # Save the figure
-    save_path = f'output/test_predictions/test_img_turkey.png'
+    save_path = f'single_guess/single_guess.png'
     plt.savefig(save_path, dpi=150, bbox_inches='tight')
     plt.close()
                     

@@ -1,7 +1,5 @@
-from PIL import Image
 import torch, os
 import torch.nn as nn
-import numpy as np
 import matplotlib.pyplot as plt
 from transformers import CLIPProcessor, CLIPModel
 from torch.utils.data import Dataset, DataLoader
@@ -9,21 +7,6 @@ from torchvision.transforms import ToPILImage
 from datasets import load_dataset
 from tqdm import tqdm
 import random
-
-# seed = random.randint(0, 10000)
-seed = 5519
-ds = load_dataset("stochastic/random_streetview_images_pano_v0.0.2").shuffle(seed=seed)
-print(f"Using seed: {seed}")
-
-if torch.backends.mps.is_available():
-    print('Using mps')
-    my_device = torch.device("mps")
-elif torch.cuda.is_available():
-    print('Using cuda')
-    my_device = torch.device("cuda")
-else:
-    print('Using cpu')
-    my_device = torch.device("cpu")
 
 class GeoGuessrDataset(Dataset):
     def __init__(self, hf_dataset, processor):
@@ -78,7 +61,7 @@ class GeoGuessr(nn.Module):
                 param.requires_grad = True
         
         # Get the embedding dimension from CLIP
-        embed_dim = self.clip.config.projection_dim  # Usually 512
+        embed_dim = self.clip.config.projection_dim # 768
         
         # Regression head for coordinates
         self.regressor = nn.Sequential(
@@ -145,34 +128,42 @@ def haversine_distance(pred, target, reduction=None):
 def haversine_loss(pred, target):
     return haversine_distance(pred, target, reduction='mean')
 
-# Training setup
-model = GeoGuessr(unfreeze_layers=2).to(my_device)
+# seed = random.randint(0, 10000)
+seed = 5519
+# seed = 1915
+ds = load_dataset("stochastic/random_streetview_images_pano_v0.0.2").shuffle(seed=seed)
+print(f"Using seed: {seed}")
+
+# Initialize processor
 processor = CLIPProcessor.from_pretrained("geolocal/StreetCLIP")
 
-# Initialize GradScaler for mixed precision training (only for CUDA)
-use_amp = torch.cuda.is_available()
-if use_amp:
-    from torch.amp import autocast, GradScaler
-    scaler = GradScaler('cuda')
-    print("Using mixed precision training (AMP)")
-else:
-    scaler = None
-    print("Using standard precision training")
-
-# Training loop
-sample_train = ds['train'].select(range(9000))
-sample_val = ds['train'].select(range(9000, 10000))
-sample_test = ds['train'].select(range(10000, len(ds['train'])))
-
-train_data = GeoGuessrDataset(sample_train, processor)
-test_data = GeoGuessrDataset(sample_test, processor)
-val_data = GeoGuessrDataset(sample_val, processor)
-
-train_loader = DataLoader(train_data, batch_size=64, shuffle=True)
-test_loader = DataLoader(test_data, batch_size=64, shuffle=False)
-val_loader = DataLoader(val_data, batch_size=64, shuffle=False)
-
 if __name__ == '__main__':
+    if torch.backends.mps.is_available():
+        print('Using mps')
+        my_device = torch.device("mps")
+    elif torch.cuda.is_available():
+        print('Using cuda')
+        my_device = torch.device("cuda")
+    else:
+        print('Using cpu')
+        my_device = torch.device("cpu")
+
+    # Prepare datasets
+    sample_train = ds['train'].select(range(9000))
+    sample_val = ds['train'].select(range(9000, 10000))
+    sample_test = ds['train'].select(range(10000, len(ds['train'])))
+
+    train_data = GeoGuessrDataset(sample_train, processor)
+    test_data = GeoGuessrDataset(sample_test, processor)
+    val_data = GeoGuessrDataset(sample_val, processor)
+
+    train_loader = DataLoader(train_data, batch_size=64, shuffle=True)
+    test_loader = DataLoader(test_data, batch_size=64, shuffle=False)
+    val_loader = DataLoader(val_data, batch_size=64, shuffle=False)
+
+    # Initialize model
+    model = GeoGuessr(unfreeze_layers=2).to(my_device)
+
     # Verify what's trainable
     print("\nTrainable parameters:")
     total_params = 0
@@ -186,6 +177,16 @@ if __name__ == '__main__':
     print(f"\nTotal parameters: {total_params:,}")
     print(f"Trainable parameters: {trainable_params:,}")
     print(f"Percentage trainable: {100*trainable_params/total_params:.2f}%\n")
+
+    # Initialize GradScaler for mixed precision training (only for CUDA)
+    use_amp = torch.cuda.is_available()
+    if use_amp:
+        from torch.amp import autocast, GradScaler
+        scaler = GradScaler('cuda')
+        print("Using mixed precision training (AMP)")
+    else:
+        scaler = None
+        print("Using standard precision training")
 
     clip_params = []
     for name, param in model.clip.named_parameters():
@@ -207,7 +208,7 @@ if __name__ == '__main__':
     )
 
     os.makedirs('output/checkpoints', exist_ok=True)
-    print(f"Using {len(sample_train)} training images, {len(sample_val)} validation images, and {len(sample_test)} testing images")
+    print(f"Using {len(sample_train)} training images, {len(sample_val)} validation images, and {len(sample_test)} testing images\n")
 
     # RESUME TRAINING
     resume_from_checkpoint = False # Set to True to resume
@@ -220,8 +221,8 @@ if __name__ == '__main__':
     test_accuracies = []
 
     start_epoch = 0
-    num_epochs = 50
-    patience = 4
+    num_epochs = 30
+    patience = 2
     epochs_no_improve = 0
     best_val_loss = float('inf')
 
@@ -240,10 +241,25 @@ if __name__ == '__main__':
         train_losses = checkpoint.get('train_losses', [])
         val_losses = checkpoint.get('val_losses', [])
         best_val_loss = checkpoint.get('val_loss', float('inf'))
+        epochs_no_improve = checkpoint.get('epochs_no_improve', 0)
+
+        # Clean up
+        del checkpoint
+        import gc
+        gc.collect()
         
-        print(f"Resumed from epoch {checkpoint['epoch'] + 1}")
+        print(f"Resumed from epoch {start_epoch}")
         print(f"Previous best val loss: {best_val_loss:.2f} km")
-        print(f"Training history loaded: {len(train_losses)} epochs")
+        print(f"Epochs without improvement: {epochs_no_improve}")
+
+        for i, param_group in enumerate(optimizer.param_groups):
+            lr = param_group['lr']
+            if i == 0:
+                print(f"Regressor LR: {lr:.2e}")
+            elif i == 1:
+                print(f"CLIP LR: {lr:.2e}")
+
+        print(f"Scheduler num bad epochs: {scheduler.num_bad_epochs}")
         print(f"Starting from epoch: {start_epoch + 1}\n")
 
     for epoch in range(start_epoch, num_epochs):
@@ -324,6 +340,7 @@ if __name__ == '__main__':
             'val_loss': avg_val_loss,
             'train_losses': train_losses,
             'val_losses': val_losses,
+            'epochs_no_improve': epochs_no_improve
         }
 
         if avg_val_loss < best_val_loss:
