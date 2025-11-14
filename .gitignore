@@ -210,5 +210,5 @@ __marimo__/
 .vscode
 *checkpoints/
 *test_predictions/
-.DS_Store
+*.DS_Store
 output/
