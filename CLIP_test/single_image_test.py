@@ -1,10 +1,67 @@
 from PIL import Image
-import torch, folium, prototype
+import torch, folium
+import torch.nn as nn
+from transformers import CLIPModel
 import matplotlib.pyplot as plt
 from transformers import CLIPProcessor
 from torchvision.transforms import ToPILImage
 import os
 
+class GeoGuessr(nn.Module):
+    def __init__(self, clip_model_name="geolocal/StreetCLIP", unfreeze_layers=2):
+        super().__init__()
+        # Load pre-trained CLIP as feature extractor
+        self.clip = CLIPModel.from_pretrained(clip_model_name)
+        
+        # Freeze CLIP weights 
+        for param in self.clip.parameters():
+            param.requires_grad = False
+
+        # Unfreeze last N layers of CLIP
+        if unfreeze_layers > 0:
+            total_layers = len(self.clip.vision_model.encoder.layers)
+            print(f"Total CLIP vision encoder layers: {total_layers}")
+            print(f"Unfreezing last {unfreeze_layers} layers")
+        
+        for i in range(total_layers - unfreeze_layers, total_layers):
+            for param in self.clip.vision_model.encoder.layers[i].parameters():
+                param.requires_grad = True
+        
+        # Unfreeze the final layer norm and projection
+        for param in self.clip.vision_model.post_layernorm.parameters():
+            param.requires_grad = True
+        if hasattr(self.clip.vision_model, 'visual_projection'):
+            for param in self.clip.vision_model.visual_projection.parameters():
+                param.requires_grad = True
+        
+        # Get the embedding dimension from CLIP
+        embed_dim = self.clip.config.projection_dim # 768
+        
+        # Regression head for coordinates
+        self.regressor = nn.Sequential(
+            nn.Linear(embed_dim, 512),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            nn.Linear(128, 2)  # Output: [latitude, longitude]
+        )
+        
+    def forward(self, pixel_values):
+        image_embeds = self.clip.get_image_features(pixel_values=pixel_values)
+        
+        # Predict coordinates
+        coords = self.regressor(image_embeds)
+        
+        # Constrain to valid lat/lon ranges
+        lat = torch.tanh(coords[:, 0]) * 90  # [-90, 90]
+        lon = torch.tanh(coords[:, 1]) * 180  # [-180, 180]
+        
+        return torch.stack([lat, lon], dim=1)
+    
 if __name__ == '__main__':
     use_amp = False
     if torch.backends.mps.is_available():
@@ -25,21 +82,17 @@ if __name__ == '__main__':
     else:
         scaler = None
         print("Using standard precision training")
-
-    dataset = prototype.ds
-    model = prototype.GeoGuessr(unfreeze_layers=2).to(my_device)
+    
+    model = GeoGuessr().to(my_device)
     processor = CLIPProcessor.from_pretrained("geolocal/StreetCLIP")
     checkpoint = torch.load('output_best_FT/checkpoints/best_model.pt', map_location=my_device)
+    model.load_state_dict(checkpoint['model_state_dict'])
+    model.eval()
 
     print(f"Loaded best model from epoch {checkpoint['epoch']+1} with validation loss: {checkpoint['val_loss']:.2f} km")
 
-    # sample = dataset['train'][0]
-    # image = sample['image']
-    # print(type(image))
-
     image_path = "single_test.png"
-    img = Image.open(image_path)
-    # img = img.resize((3030, 561))
+    img = Image.open(image_path).convert('RGB')
     inputs = processor(images=img, return_tensors="pt")
     pixel_values = inputs['pixel_values'].to(my_device)
 

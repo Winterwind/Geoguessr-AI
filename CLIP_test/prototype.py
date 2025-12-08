@@ -125,12 +125,23 @@ def haversine_distance(pred, target, reduction=None):
     else:
         raise ValueError(f"Unknown reduction: {reduction}")
 
+'''
 def haversine_loss(pred, target):
     return haversine_distance(pred, target, reduction='mean')
+'''
 
-# seed = random.randint(0, 10000)
-seed = 5519
-# seed = 1915
+def geoguessr_loss(pred, target, max_score=5000):
+    c = 40000 / 2  # Half Earth's circumference in km
+    score = max_score * torch.exp(-10*haversine_distance(pred, target, reduction='mean')/c)
+    return -score
+
+seed = random.randint(0, 10000)
+seed = 332
+
+os.makedirs('output', exist_ok=True)
+with open('output/log.txt', 'w') as f:
+    f.write(f"Seed: {seed}\n")
+
 ds = load_dataset("stochastic/random_streetview_images_pano_v0.0.2").shuffle(seed=seed)
 print(f"Using seed: {seed}")
 
@@ -172,7 +183,7 @@ if __name__ == '__main__':
         total_params += param.numel()
         if param.requires_grad:
             trainable_params += param.numel()
-            print(f"  {name}: {param.numel():,} params")
+            # print(f"  {name}: {param.numel():,} params")
 
     print(f"\nTotal parameters: {total_params:,}")
     print(f"Trainable parameters: {trainable_params:,}")
@@ -203,15 +214,17 @@ if __name__ == '__main__':
         optimizer, 
         mode='min',           # minimize validation loss
         factor=0.5,           # reduce LR by half
-        patience=2,           # wait 2 epochs before reducing
-        min_lr=1e-7           # don't go below this
+        patience=3,           # wait 3 epochs before reducing
+        min_lr=1e-6,
+        threshold=10,
+        threshold_mode='abs'  # use absolute threshold        
     )
 
     os.makedirs('output/checkpoints', exist_ok=True)
     print(f"Using {len(sample_train)} training images, {len(sample_val)} validation images, and {len(sample_test)} testing images\n")
 
     # RESUME TRAINING
-    resume_from_checkpoint = False # Set to True to resume
+    resume_from_checkpoint = True # Set to True to resume
     checkpoint_path = 'output/checkpoints/best_model.pt'
 
     train_losses = []
@@ -235,6 +248,16 @@ if __name__ == '__main__':
         model.load_state_dict(checkpoint['model_state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+
+        # Clean up
+        del checkpoint
+        import gc
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        
+        # Load on CPU to avoid GPU memory issues
+        checkpoint = torch.load(checkpoint_path, map_location='cpu')
         
         # Load training history
         start_epoch = checkpoint['epoch'] + 1  # Start from next epoch
@@ -245,11 +268,10 @@ if __name__ == '__main__':
 
         # Clean up
         del checkpoint
-        import gc
         gc.collect()
         
         print(f"Resumed from epoch {start_epoch}")
-        print(f"Previous best val loss: {best_val_loss:.2f} km")
+        print(f"Previous best val loss: {best_val_loss:.2f}")
         print(f"Epochs without improvement: {epochs_no_improve}")
 
         for i, param_group in enumerate(optimizer.param_groups):
@@ -277,7 +299,7 @@ if __name__ == '__main__':
             if use_amp:
                 with autocast(device_type='cuda'):
                     predicted_coords = model(pixel_values)
-                    loss = haversine_loss(predicted_coords, true_coords)
+                    loss = geoguessr_loss(predicted_coords, true_coords)
                 
                 # Scale loss and do backward pass
                 scaler.scale(loss).backward()
@@ -291,7 +313,7 @@ if __name__ == '__main__':
             else:
                 # Standard training for MPS or CPU
                 predicted_coords = model(pixel_values)
-                loss = haversine_loss(predicted_coords, true_coords)
+                loss = geoguessr_loss(predicted_coords, true_coords)
                 
                 loss.backward()
 
@@ -299,11 +321,13 @@ if __name__ == '__main__':
                 optimizer.step()
             
             total_train_loss += loss.item()
-            train_pbar.set_postfix({'loss': f'{loss.item():.2f} km', 'avg_loss': f'{total_train_loss/(batch_idx+1):.2f} km'})
+            avg_train_score = -total_train_loss / (batch_idx + 1)
+
+            train_pbar.set_postfix({'loss': f'{loss.item():.2f}', 'avg score': f'{avg_train_score:.0f}/5000'})
         
         avg_train_loss = total_train_loss / len(train_loader)
         train_losses.append(avg_train_loss)
-        print(f"Epoch {epoch+1}/{num_epochs} - Training Loss: {avg_train_loss:.2f} km")
+        print(f"Epoch {epoch+1}/{num_epochs} - Training Loss: {avg_train_loss:.2f}")
 
         total_val_loss = 0
         model.eval()
@@ -319,14 +343,15 @@ if __name__ == '__main__':
                 else:
                     predicted_coords = model(pixel_values)
 
-                loss = haversine_loss(predicted_coords, true_coords)
+                loss = geoguessr_loss(predicted_coords, true_coords)
                 total_val_loss += loss.item()
+                avg_val_score = -total_val_loss / (batch_idx + 1)
 
-                val_pbar.set_postfix({'loss': f'{loss.item():.2f} km', 'avg_loss': f'{total_val_loss/(batch_idx+1):.2f} km'})
+                val_pbar.set_postfix({'loss': f'{loss.item():.2f}', 'avg score': f'{avg_val_score:.0f}/5000'})
                     
         avg_val_loss = total_val_loss / len(val_loader)
         val_losses.append(avg_val_loss)
-        print(f"Epoch {epoch+1}/{num_epochs} - Validation Loss: {avg_val_loss:.2f} km\n")
+        print(f"Epoch {epoch+1}/{num_epochs} - Validation Loss: {avg_val_loss:.2f}\n")
 
         # Step the scheduler based on validation loss
         scheduler.step(avg_val_loss)
@@ -350,7 +375,7 @@ if __name__ == '__main__':
             # Save the best model (lowest validation loss)
             best_checkpoint_path = 'output/checkpoints/best_model.pt'
             torch.save(checkpoint, best_checkpoint_path)
-            print(f"Saved best model: {best_checkpoint_path} (Val Loss: {avg_val_loss:.2f} km)")
+            print(f"Saved best model: {best_checkpoint_path} (Val Loss: {avg_val_loss:.2f})")
         else:
             epochs_no_improve += 1
             
@@ -362,7 +387,7 @@ if __name__ == '__main__':
     print("\nLoading best model for testing...")
     best_checkpoint = torch.load('output/checkpoints/best_model.pt', map_location=my_device)
     model.load_state_dict(best_checkpoint['model_state_dict'])
-    print(f"Loaded best model from epoch {best_checkpoint['epoch']+1} with validation loss: {best_checkpoint['val_loss']:.2f} km")
+    print(f"Loaded best model from epoch {best_checkpoint['epoch']+1} with validation loss: {best_checkpoint['val_loss']:.2f}")
 
     # Test phase
     os.makedirs('output/test_predictions', exist_ok=True)
@@ -386,11 +411,13 @@ if __name__ == '__main__':
                 predicted_coords = model(pixel_values)
 
             # Calculate loss for the batch (mean)
-            loss = haversine_loss(predicted_coords, true_coords)
+            loss = geoguessr_loss(predicted_coords, true_coords)
             test_loss += loss.detach().cpu().numpy()
-            
+         
             avg_test_loss = test_loss / (batch_idx + 1)
-            test_pbar.set_postfix({'loss': f'{loss.item():.2f} km', 'avg_loss': f'{avg_test_loss:.2f} km'})
+            avg_test_score = -avg_test_loss
+
+            test_pbar.set_postfix({'loss': f'{loss.item():.2f}', 'avg score': f'{avg_test_score:.0f}/5000'})
             
             # Calculate individual distances for visualization
             individual_distances = haversine_distance(predicted_coords, true_coords)
@@ -456,8 +483,10 @@ if __name__ == '__main__':
                     image_counter += 1
 
         avg_test_loss = test_loss / len(test_loader)
+        avg_test_score = -avg_test_loss
 
-        print(f"\nTest Phase Complete. Average test loss: {avg_test_loss:.2f} km")
+        print(f"\nTest Phase Complete. Average test loss: {avg_test_loss:.2f}")
+        print(f"Average test score: {avg_test_score:.0f}/5000")
         print(f"Saved {image_counter} test prediction visualizations to output/test_predictions/")
 
         # Plot loss
@@ -468,8 +497,14 @@ if __name__ == '__main__':
         plt.axhline(y=avg_test_loss, color='r', linestyle='-', label='test')
         plt.title('Model Loss')
         plt.xlabel('epoch')
-        plt.ylabel('loss (km)')
+        plt.ylabel('loss (points)')
         plt.legend()
         plt.grid(True)
         plt.savefig('output/loss.png')
         plt.close()
+
+    with open('output/log.txt', 'a') as f:
+        f.write(f"Best validation loss: {best_val_loss:.2f}\n")
+        f.write(f"Best training loss: {min(train_losses):.2f}\n")
+        f.write(f"Average test loss: {avg_test_loss:.2f}\n")
+        f.write(f"Average test score: {avg_test_score:.0f}/5000\n")
