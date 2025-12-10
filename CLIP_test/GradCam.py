@@ -3,8 +3,9 @@ import torch.nn.functional as F
 import numpy as np
 import matplotlib.pyplot as plt
 from PIL import Image
+from datasets import load_dataset
 import cv2
-from prototype import GeoGuessr, GeoGuessrDataset, processor, ds, haversine_distance
+from GeoAI import GeoGuessr, GeoGuessrDataset, processor, haversine_distance
 import os
 
 class GradCAM:
@@ -114,6 +115,10 @@ class GradCAM:
 
 # Example usage
 if __name__ == '__main__':
+    seed = 5519 # Should match seed used to train model
+    ds = load_dataset("stochastic/random_streetview_images_pano_v0.0.2").shuffle(seed=seed)
+    print(f"Using seed: {seed}")
+
     if torch.backends.mps.is_available():
         print('Using mps')
         device = torch.device("mps")
@@ -126,7 +131,7 @@ if __name__ == '__main__':
 
     # Load your trained model
     model = GeoGuessr(unfreeze_layers=2).to(device)
-    checkpoint = torch.load('output_best_FT/checkpoints/best_model.pt', map_location=device)
+    checkpoint = torch.load('output/checkpoints/best_model.pt', map_location=device)
     model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
     
