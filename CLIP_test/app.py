@@ -61,7 +61,7 @@ model = GeoGuessr(unfreeze_layers=2).to(device)
 processor = CLIPProcessor.from_pretrained("geolocal/StreetCLIP")
 
 # Load checkpoint - UPDATE THIS PATH
-checkpoint = torch.load('output_best_FT/checkpoints/best_model.pt', map_location=device)
+checkpoint = torch.load('output/checkpoints/best_model.pt', map_location=device)
 model.load_state_dict(checkpoint['model_state_dict'])
 model.eval()
 
