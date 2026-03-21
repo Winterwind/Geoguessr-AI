@@ -212,3 +212,5 @@ __marimo__/
 *test_predictions/
 *.DS_Store
 output/
+CLAUDE.*
+claude/*
