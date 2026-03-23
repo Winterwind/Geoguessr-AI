@@ -1,10 +1,11 @@
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 from PIL import Image
 import torch
 import base64
 import io
 from transformers import CLIPProcessor, CLIPModel
+from huggingface_hub import hf_hub_download
 import torch.nn as nn
 
 app = Flask(__name__)
@@ -60,8 +61,8 @@ class GeoGuessr(nn.Module):
 model = GeoGuessr(unfreeze_layers=2).to(device)
 processor = CLIPProcessor.from_pretrained("geolocal/StreetCLIP")
 
-# Load checkpoint - UPDATE THIS PATH
-checkpoint = torch.load('output/checkpoints/best_model.pt', map_location=device)
+checkpoint_path = hf_hub_download(repo_id="ArianDjahed/geoguessr-ai-model", filename="best_model.pt")
+checkpoint = torch.load(checkpoint_path, map_location=device)
 model.load_state_dict(checkpoint['model_state_dict'])
 model.eval()
 
@@ -76,11 +77,6 @@ def base64_to_pil(base64_string):
     image_data = base64.b64decode(base64_string)
     image = Image.open(io.BytesIO(image_data)).convert('RGB')
     return image
-
-@app.route('/')
-def index():
-    """Serve the HTML interface"""
-    return send_file('geoguessr_ui.html')
 
 @app.route('/predict', methods=['POST'])
 def predict():
@@ -128,7 +124,6 @@ if __name__ == '__main__':
     print("GeoGuessr AI Server")
     print("="*50)
     print(f"Device: {device}")
-    print(f"Navigate to: http://localhost:5000")
     print("="*50 + "\n")
     
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    app.run(host='0.0.0.0', port=7860, debug=False)
